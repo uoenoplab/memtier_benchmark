@@ -1213,6 +1213,8 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_tls_protocols,
         o_hdr_file_prefix,
         o_rate_limiting,
+        o_rate_poisson,
+        o_homa,
         o_uri,
         o_statsd_host,
         o_statsd_port,
@@ -1327,6 +1329,8 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         {"miss-rate-threshold", 1, 0, o_miss_rate_threshold},
         {"cpu-warn-threshold", 1, 0, o_cpu_warn_threshold},
         {"rate-limiting", 1, 0, o_rate_limiting},
+        {"rate-poisson", 1, 0, o_rate_poisson},
+        {"homa", 0, 0, o_homa},
         {"uri", 1, 0, o_uri},
         {"statsd-host", 1, 0, o_statsd_host},
         {"statsd-port", 1, 0, o_statsd_port},
@@ -2079,6 +2083,18 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
             }
             break;
         }
+        case o_rate_poisson: {
+            endptr = NULL;
+            cfg->request_rate_poisson = strtod(optarg, &endptr);
+            if (!(cfg->request_rate_poisson > 0) || !endptr || *endptr != '\0') {
+                fprintf(stderr, "error: Poisson rate must be greater than zero.\n");
+                return -1;
+            }
+            break;
+        }
+        case o_homa:
+            cfg->homa = true;
+            break;
 #ifdef USE_TLS
         case o_tls:
             cfg->tls = true;
@@ -2668,6 +2684,11 @@ void usage()
         "(default is unlimited rate).\n"
         "                                 If you use --rate-limiting and a very large rate is entered which cannot be "
         "met, memtier will do as many requests as possible per second.\n"
+        "      --rate-poisson=RATE        Make each connection's requests a Poisson process of RATE requests per second "
+        "(fractions allowed): exponential gaps, independent per connection. A request that falls due while the "
+        "pipeline is full is sent when it has room. Excludes --rate-limiting.\n"
+        "      --homa                     Talk to the server over Homa (IPPROTO_HOMA) instead of TCP; --port is its "
+        "Homa port and --server must be an IPv4 address. Each client is one Homa socket, each write one RPC.\n"
         "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
         "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
         "      --test-time=SECS           Number of seconds to run the test\n"
@@ -4749,6 +4770,25 @@ int main(int argc, char *argv[])
             exit(1);
         }
         delete tmp_protocol;
+    }
+
+    if (cfg.homa && (cfg.cluster_mode || cfg.unix_socket
+#ifdef USE_TLS
+                     || cfg.tls
+#endif
+                     )) {
+        fprintf(stderr, "error: --homa cannot be combined with --cluster-mode, --unix-socket or --tls.\n");
+        usage();
+    }
+
+    // --rate-poisson reuses the rate-limit gate (one request per arrival); the
+    // arrivals themselves come from shard_connection's Poisson timer.
+    if (cfg.request_rate_poisson > 0) {
+        if (cfg.request_rate) {
+            fprintf(stderr, "error: --rate-poisson and --rate-limiting are mutually exclusive.\n");
+            usage();
+        }
+        cfg.request_rate = 1;
     }
 
     // if user configured rate limiting, do some calculations

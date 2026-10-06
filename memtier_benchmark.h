@@ -212,6 +212,8 @@ struct benchmark_config
     double cpu_warn_threshold;  // warn when a memtier thread's CPU exceeds this fraction of a core (default 0.95)
     const char *hdr_prefix;
     unsigned int request_rate;
+    double request_rate_poisson; // --rate-poisson: per-connection Poisson arrival rate (req/s), 0 = off
+    bool homa;                   // --homa: talk to the server over Homa (IPPROTO_HOMA) instead of TCP
     unsigned int request_per_interval;
     unsigned int request_interval_microsecond;
     // Client staircase ramp-up

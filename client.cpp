@@ -1157,7 +1157,12 @@ client_group::client_group(benchmark_config *config, abstract_protocol *protocol
         m_staircase_timer(NULL),
         m_staircase_active_clients(0)
 {
-    m_base = event_base_new();
+    // --rate-poisson schedules arrivals with sub-millisecond gaps: ask for a
+    // timer that is not rounded to the millisecond.
+    struct event_config *ev_cfg = event_config_new();
+    if (config->request_rate_poisson > 0) event_config_set_flag(ev_cfg, EVENT_BASE_FLAG_PRECISE_TIMER);
+    m_base = event_base_new_with_config(ev_cfg);
+    event_config_free(ev_cfg);
     assert(m_base != NULL);
 
     assert(protocol != NULL);

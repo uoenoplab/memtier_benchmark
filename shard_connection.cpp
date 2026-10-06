@@ -52,6 +52,11 @@
 #include "retry_policy.h"
 #include "event2/bufferevent.h"
 
+#include <math.h>
+#include <random>
+#include <sys/mman.h>
+#include "homa/homa.h"
+
 // Maximum backoff delay enforced after every exponential-backoff multiplication.
 // Without a cap, a factor of 2.0 and --max-reconnect-attempts=0 (unlimited)
 // causes the delay to double on every attempt: after ~30 doublings the next
@@ -242,7 +247,16 @@ shard_connection::shard_connection(unsigned int id, connections_manager *conns_m
         m_retry_drain_timer(NULL),
         m_current_retry_backoff_ms(0.0),
         m_deferred_fill_timer(NULL),
-        m_bev_paused(false)
+        m_bev_paused(false),
+        m_homa_fd(-1),
+        m_homa_region(NULL),
+        m_homa_region_size(0),
+        m_homa_ctl(NULL),
+        m_homa_end(NULL),
+        m_homa_read_event(NULL),
+        m_homa_retry_timer(NULL),
+        m_homa_destlen(0),
+        m_homa_in_flight(false)
 {
     m_id = id;
     m_conns_manager = conns_man;
@@ -292,6 +306,7 @@ shard_connection::~shard_connection()
         bufferevent_free(m_bev);
         m_bev = NULL;
     }
+    homa_close();
 
     if (m_event_timer != NULL) {
         event_free(m_event_timer);
@@ -460,6 +475,10 @@ int shard_connection::connect(struct connect_info *addr)
                            ? setup_none
                            : setup_done;
 
+    if (m_config->homa) {
+        return homa_connect(addr);
+    }
+
     // setup socket
     int sockfd = setup_socket(addr);
     if (sockfd < 0) {
@@ -504,6 +523,7 @@ void shard_connection::disconnect()
         bufferevent_free(m_bev);
         m_bev = NULL;
     }
+    homa_close();
     // After free, any future bufferevent starts in the default (enabled) state.
     m_bev_paused = false;
 
@@ -1440,7 +1460,12 @@ void shard_connection::handle_event(short events)
         m_reconnecting = false;
 
         /* Set timer for request rate (create or recreate after reconnect) */
-        if (m_config->request_rate && m_event_timer == NULL) {
+        if (m_config->request_rate_poisson > 0 && m_event_timer == NULL) {
+            m_request_per_cur_interval = 0; // the first request waits for the first arrival
+            m_event_timer = event_new(m_event_base, -1, 0, cluster_client_timer_handler, (void *) this);
+            gettimeofday(&m_poisson_next, NULL);
+            arm_poisson_timer();
+        } else if (m_config->request_rate && m_event_timer == NULL) {
             unsigned int first_interval_microsecond = m_config->request_interval_microsecond;
             if (m_request_rate_phase_pending) {
                 first_interval_microsecond += m_request_rate_phase_microsecond;
@@ -1494,8 +1519,42 @@ void shard_connection::handle_event(short events)
     }
 }
 
+// Advance m_poisson_next by an exponential gap and arm the timer for it. Arrivals
+// are scheduled on absolute times, so a late timer does not slow the process down.
+void shard_connection::arm_poisson_timer(void)
+{
+    static thread_local std::mt19937_64 rng(std::random_device{}());
+    double gap = std::exponential_distribution<double>(m_config->request_rate_poisson)(rng);
+    long long us = (long long) m_poisson_next.tv_usec + (long long) (gap * 1e6);
+    m_poisson_next.tv_sec += us / 1000000;
+    m_poisson_next.tv_usec = us % 1000000;
+    struct timeval now, wait;
+    gettimeofday(&now, NULL);
+    if (timercmp(&m_poisson_next, &now, <)) {
+        timerclear(&wait);
+    } else {
+        timersub(&m_poisson_next, &now, &wait);
+    }
+    event_add(m_event_timer, &wait);
+}
+
 void shard_connection::handle_timer_event(void)
 {
+    // --rate-poisson: one arrival per firing; the timer is one-shot and re-armed
+    // with a fresh exponential gap. An arrival that finds the pipeline full stays
+    // in the budget and goes out when a response frees a slot.
+    if (m_config->request_rate_poisson > 0) {
+        if (m_request_per_cur_interval < 1000) m_request_per_cur_interval++;
+        arm_poisson_timer();
+        if (m_conns_manager->finished() && m_conns_manager->all_connections_idle()) {
+            m_conns_manager->set_end_time();
+            m_conns_manager->disconnect_all();
+            return;
+        }
+        fill_pipeline();
+        return;
+    }
+
     // The first timeout includes this connection's phase. Switch to the common
     // refill interval after it fires so the phase remains stable thereafter.
     if (m_request_rate_phase_pending) {
@@ -1864,4 +1923,174 @@ void shard_connection::send_arbitrary_command_end(size_t command_index, struct t
         }
     }
     push_req(req);
+}
+
+// --- Homa transport (--homa) ----------------------------------------------------------------
+
+void homa_pair_read_handler(bufferevent *bev, void *ctx)
+{
+    ((shard_connection *) ctx)->homa_send_pending();
+}
+
+void homa_socket_read_handler(evutil_socket_t fd, short what, void *ctx)
+{
+    ((shard_connection *) ctx)->homa_receive();
+}
+
+void homa_send_retry_handler(evutil_socket_t fd, short what, void *ctx)
+{
+    ((shard_connection *) ctx)->homa_send_pending();
+}
+
+int shard_connection::homa_connect(struct connect_info *addr)
+{
+    if (addr->ci_family != AF_INET || addr->ci_addrlen > sizeof(m_homa_dest)) {
+        benchmark_error_log("--homa needs an IPv4 server address\n");
+        return -1;
+    }
+    m_homa_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_HOMA);
+    if (m_homa_fd < 0) {
+        benchmark_error_log("Homa socket: %s (is homa.ko loaded?)\n", strerror(errno));
+        return -1;
+    }
+    // Receive pool: the kernel's minimum, a bpage per possible CPU plus two
+    // full-size messages (one response is in flight at a time).
+    long cpus = sysconf(_SC_NPROCESSORS_CONF);
+    m_homa_region_size = (size_t) ((cpus > 0 ? cpus : 1) + 2 * HOMA_MAX_BPAGES) * HOMA_BPAGE_SIZE;
+    m_homa_region = (uint8_t *) mmap(NULL, m_homa_region_size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    struct homa_rcvbuf_args rcvbuf;
+    rcvbuf.start = (__u64) (uintptr_t) m_homa_region;
+    rcvbuf.length = m_homa_region_size;
+    if (m_homa_region == MAP_FAILED ||
+        setsockopt(m_homa_fd, IPPROTO_HOMA, SO_HOMA_RCVBUF, &rcvbuf, sizeof(rcvbuf)) < 0) {
+        benchmark_error_log("Homa receive buffer: %s\n", strerror(errno));
+        if (m_homa_region == MAP_FAILED) m_homa_region = NULL;
+        homa_close();
+        return -1;
+    }
+    fcntl(m_homa_fd, F_SETFL, fcntl(m_homa_fd, F_GETFL, 0) | O_NONBLOCK);
+    m_homa_ctl = (struct homa_recvmsg_args *) calloc(1, sizeof(struct homa_recvmsg_args));
+    memcpy(&m_homa_dest, addr->ci_addr, addr->ci_addrlen);
+    m_homa_destlen = addr->ci_addrlen;
+    m_homa_in_flight = false;
+
+    // Deferred callbacks: a response written into the pair never re-enters
+    // homa_receive() through memtier's read handler.
+    struct bufferevent *pair[2];
+    if (bufferevent_pair_new(m_event_base, BEV_OPT_DEFER_CALLBACKS, pair) != 0) {
+        homa_close();
+        return -1;
+    }
+    m_bev_paused = false;
+    m_bev = pair[0];
+    m_homa_end = pair[1];
+    bufferevent_setcb(m_bev, cluster_client_read_handler, NULL, cluster_client_event_handler, (void *) this);
+    m_protocol->set_buffers(bufferevent_get_input(m_bev), bufferevent_get_output(m_bev));
+    bufferevent_setcb(m_homa_end, homa_pair_read_handler, NULL, NULL, (void *) this);
+    bufferevent_enable(m_homa_end, EV_READ | EV_WRITE);
+    m_homa_read_event = event_new(m_event_base, m_homa_fd, EV_READ | EV_PERSIST, homa_socket_read_handler, (void *) this);
+    event_add(m_homa_read_event, NULL);
+
+    set_readable_id();
+    m_connection_state = conn_in_progress;
+    // Nothing to wait for: report the connection up from the event loop.
+    bufferevent_trigger_event(m_bev, BEV_EVENT_CONNECTED, BEV_TRIG_DEFER_CALLBACKS);
+    return 0;
+}
+
+// Send what memtier wrote since the last request as one RPC, unless one is in flight.
+void shard_connection::homa_send_pending(void)
+{
+    if (m_homa_fd < 0 || m_homa_end == NULL || m_homa_in_flight) return;
+    struct evbuffer *pending = bufferevent_get_input(m_homa_end);
+    size_t len = evbuffer_get_length(pending);
+    if (len == 0) return;
+    if (len > HOMA_MAX_MESSAGE_LENGTH) len = HOMA_MAX_MESSAGE_LENGTH; // the server joins split commands
+    unsigned char *data = evbuffer_pullup(pending, len);
+
+    struct homa_sendmsg_args args;
+    memset(&args, 0, sizeof(args));
+    struct iovec vec;
+    vec.iov_base = data;
+    vec.iov_len = len;
+    struct msghdr hdr;
+    memset(&hdr, 0, sizeof(hdr));
+    hdr.msg_name = &m_homa_dest;
+    hdr.msg_namelen = m_homa_destlen;
+    hdr.msg_iov = &vec;
+    hdr.msg_iovlen = 1;
+    hdr.msg_control = &args;
+    hdr.msg_controllen = 0;
+    if (sendmsg(m_homa_fd, &hdr, 0) < 0) {
+        if (errno == EAGAIN || errno == ENOMEM) { // out of send memory: try again shortly
+            if (m_homa_retry_timer == NULL)
+                m_homa_retry_timer = event_new(m_event_base, -1, 0, homa_send_retry_handler, (void *) this);
+            struct timeval retry = {0, 100};
+            event_add(m_homa_retry_timer, &retry);
+            return;
+        }
+        benchmark_error_log("Homa sendmsg: %s\n", strerror(errno));
+        return;
+    }
+    evbuffer_drain(pending, len);
+    m_homa_in_flight = true;
+}
+
+// Hand each response's bytes to memtier's parser, then send what queued meanwhile.
+void shard_connection::homa_receive(void)
+{
+    for (int i = 0; i < 16 && m_homa_fd >= 0; i++) {
+        struct sockaddr_in from;
+        struct msghdr hdr;
+        memset(&hdr, 0, sizeof(hdr));
+        hdr.msg_name = &from;
+        hdr.msg_namelen = sizeof(from);
+        hdr.msg_control = m_homa_ctl;
+        hdr.msg_controllen = sizeof(*m_homa_ctl);
+        m_homa_ctl->id = 0; // any RPC; also returns the previous response's bpages
+        ssize_t n = recvmsg(m_homa_fd, &hdr, MSG_DONTWAIT);
+        if (n < 0) {
+            if (errno != EAGAIN && errno != EINTR) benchmark_error_log("Homa recvmsg: %s\n", strerror(errno));
+            break;
+        }
+        m_homa_in_flight = false;
+        // A one-byte '\0' answers an RPC whose commands wrote nothing (Homa has no
+        // empty messages); a RESP reply is at least 3 bytes.
+        if (!(n == 1 && m_homa_ctl->num_bpages == 1 && m_homa_region[m_homa_ctl->bpage_offsets[0]] == '\0')) {
+            struct evbuffer *out = bufferevent_get_output(m_homa_end);
+            for (uint32_t b = 0; b < m_homa_ctl->num_bpages; b++) {
+                size_t chunk = b == m_homa_ctl->num_bpages - 1 ? (size_t) n - (size_t) b * HOMA_BPAGE_SIZE
+                                                               : (size_t) HOMA_BPAGE_SIZE;
+                evbuffer_add(out, m_homa_region + m_homa_ctl->bpage_offsets[b], chunk);
+            }
+        }
+        homa_send_pending();
+    }
+}
+
+void shard_connection::homa_close(void)
+{
+    if (m_homa_read_event != NULL) {
+        event_free(m_homa_read_event);
+        m_homa_read_event = NULL;
+    }
+    if (m_homa_retry_timer != NULL) {
+        event_free(m_homa_retry_timer);
+        m_homa_retry_timer = NULL;
+    }
+    if (m_homa_end != NULL) {
+        bufferevent_free(m_homa_end);
+        m_homa_end = NULL;
+    }
+    if (m_homa_fd >= 0) {
+        close(m_homa_fd);
+        m_homa_fd = -1;
+    }
+    if (m_homa_region != NULL) {
+        munmap(m_homa_region, m_homa_region_size);
+        m_homa_region = NULL;
+    }
+    free(m_homa_ctl);
+    m_homa_ctl = NULL;
+    m_homa_in_flight = false;
 }

@@ -33,6 +33,7 @@
 #include "protocol.h"
 
 // forward decleration
+struct homa_recvmsg_args;
 class connections_manager;
 struct benchmark_config;
 class abstract_protocol;
@@ -142,6 +143,9 @@ class shard_connection
     friend void deferred_fill_pipeline_cb(evutil_socket_t fd, short what, void *ctx);
     friend void cluster_client_read_handler(bufferevent *bev, void *ctx);
     friend void cluster_client_event_handler(bufferevent *bev, short events, void *ctx);
+    friend void homa_pair_read_handler(bufferevent *bev, void *ctx);
+    friend void homa_socket_read_handler(evutil_socket_t fd, short what, void *ctx);
+    friend void homa_send_retry_handler(evutil_socket_t fd, short what, void *ctx);
 
 public:
     shard_connection(unsigned int id, connections_manager *conn_man, benchmark_config *config,
@@ -322,6 +326,17 @@ private:
 
     void handle_event(short evtype);
     void handle_timer_event(void);
+    void arm_poisson_timer(void);
+    struct timeval m_poisson_next; // absolute time of the next Poisson arrival
+
+    // --homa: m_bev is one end of a bufferevent pair, so memtier's protocol
+    // code reads and writes it as it would a TCP connection. The other end
+    // (m_homa_end) collects the bytes memtier writes and sends them as one
+    // Homa RPC at a time; the response's bytes are written back to it.
+    int homa_connect(struct connect_info *addr);
+    void homa_send_pending(void);
+    void homa_receive(void);
+    void homa_close(void);
     void attempt_reconnect(const char *error_context);
 
     unsigned int m_id;
@@ -409,6 +424,17 @@ private:
     // conditional. Invariant: m_bev_paused == true iff m_bev is currently in
     // the EV_READ|EV_WRITE-disabled state.
     bool m_bev_paused;
+
+    int m_homa_fd;
+    uint8_t *m_homa_region;
+    size_t m_homa_region_size;
+    struct homa_recvmsg_args *m_homa_ctl; // bpages to return to Homa with the next recvmsg
+    struct bufferevent *m_homa_end;
+    struct event *m_homa_read_event;
+    struct event *m_homa_retry_timer;
+    struct sockaddr_storage m_homa_dest;
+    socklen_t m_homa_destlen;
+    bool m_homa_in_flight; // one RPC at a time: responses must reach the parser in order
 
     // EWMA of per-response latency in microseconds; see public accessors above
     // (LATENCY_EWMA_ALPHA / LATENCY_EWMA_MIN_SAMPLES). Driven by
