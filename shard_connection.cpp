@@ -594,6 +594,7 @@ void shard_connection::disconnect()
 
     // Reset rate limiting state during disconnection
     m_request_per_cur_interval = 0;
+    m_poisson_arrivals = std::queue<struct timeval>();
 
     // Clear the reconnect-in-progress flag. If a teardown races a pending
     // reconnect timer (the timer was freed above), leaving m_reconnecting
@@ -757,6 +758,10 @@ void shard_connection::push_req(request *req)
         // Handle race condition during reconnection - don't assert if interval is 0
         if (m_request_per_cur_interval > 0) {
             m_request_per_cur_interval--;
+            if (!m_poisson_arrivals.empty()) {
+                req->m_sent_time = req->m_first_sent_time = m_poisson_arrivals.front();
+                m_poisson_arrivals.pop();
+            }
         } else {
             // Rate limit exceeded, but don't crash - just log debug info
             benchmark_debug_log("Rate limit interval exhausted during request push (connection %u)\n", m_id);
@@ -1462,6 +1467,7 @@ void shard_connection::handle_event(short events)
         /* Set timer for request rate (create or recreate after reconnect) */
         if (m_config->request_rate_poisson > 0 && m_event_timer == NULL) {
             m_request_per_cur_interval = 0; // the first request waits for the first arrival
+            m_poisson_arrivals = std::queue<struct timeval>();
             m_event_timer = event_new(m_event_base, -1, 0, cluster_client_timer_handler, (void *) this);
             gettimeofday(&m_poisson_next, NULL);
             arm_poisson_timer();
@@ -1542,9 +1548,13 @@ void shard_connection::handle_timer_event(void)
 {
     // --rate-poisson: one arrival per firing; the timer is one-shot and re-armed
     // with a fresh exponential gap. An arrival that finds the pipeline full stays
-    // in the budget and goes out when a response frees a slot.
+    // in the budget and goes out when a response frees a slot; its latency counts
+    // from the arrival (m_poisson_arrivals), not from the send.
     if (m_config->request_rate_poisson > 0) {
-        if (m_request_per_cur_interval < 1000) m_request_per_cur_interval++;
+        if (m_request_per_cur_interval < 1000) {
+            m_request_per_cur_interval++;
+            m_poisson_arrivals.push(m_poisson_next);
+        }
         arm_poisson_timer();
         if (m_conns_manager->finished() && m_conns_manager->all_connections_idle()) {
             m_conns_manager->set_end_time();

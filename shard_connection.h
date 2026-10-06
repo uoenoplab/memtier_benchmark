@@ -328,6 +328,9 @@ private:
     void handle_timer_event(void);
     void arm_poisson_timer(void);
     struct timeval m_poisson_next; // absolute time of the next Poisson arrival
+    // arrivals still waiting to be sent, oldest first: a request's latency starts
+    // at its arrival, so time spent waiting behind the request in flight counts
+    std::queue<struct timeval> m_poisson_arrivals;
 
     // --homa: m_bev is one end of a bufferevent pair, so memtier's protocol
     // code reads and writes it as it would a TCP connection. The other end
