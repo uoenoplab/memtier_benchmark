@@ -187,6 +187,9 @@ void run_stats::set_end_time(struct timeval *end_time)
 
 void run_stats::summarize_current_second()
 {
+    // --no-per-second-percentiles: the per-second ("inst") histograms are left
+    // alone; only the run's cumulative histograms matter.
+    if (m_config->no_per_second_percentiles) return;
     m_cur_stats.m_get_cmd.summarize_quantiles(inst_m_get_latency_histogram, quantiles_list);
     m_cur_stats.m_set_cmd.summarize_quantiles(inst_m_set_latency_histogram, quantiles_list);
     m_cur_stats.m_wait_cmd.summarize_quantiles(inst_m_wait_latency_histogram, quantiles_list);

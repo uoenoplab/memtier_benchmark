@@ -1217,6 +1217,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_homa,
         o_sample_mix,
         o_warmup,
+        o_no_per_second_percentiles,
         o_uri,
         o_statsd_host,
         o_statsd_port,
@@ -1335,6 +1336,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         {"homa", 0, 0, o_homa},
         {"sample-mix", 0, 0, o_sample_mix},
         {"warmup", 1, 0, o_warmup},
+        {"no-per-second-percentiles", 0, 0, o_no_per_second_percentiles},
         {"uri", 1, 0, o_uri},
         {"statsd-host", 1, 0, o_statsd_host},
         {"statsd-port", 1, 0, o_statsd_port},
@@ -2102,6 +2104,9 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         case o_sample_mix:
             cfg->sample_mix = true;
             break;
+        case o_no_per_second_percentiles:
+            cfg->no_per_second_percentiles = true;
+            break;
         case o_warmup: {
             endptr = NULL;
             cfg->warmup_secs = (unsigned int) strtoul(optarg, &endptr, 10);
@@ -2711,6 +2716,9 @@ void usage()
         "      --warmup=SECS              Run each client SECS seconds before --test-time starts and do not count the "
         "requests sent meanwhile: new connections, server-side client setup and first-touch page faults stay out "
         "of the results.\n"
+        "      --no-per-second-percentiles Skip each client's per-second latency percentiles (the JSON time series). "
+        "They cost a pass over several HDR histograms per client and second, which with thousands of low-rate "
+        "clients stalls the worker threads; the run's totals and percentiles are unaffected.\n"
         "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
         "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
         "      --test-time=SECS           Number of seconds to run the test\n"

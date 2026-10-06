@@ -216,6 +216,7 @@ struct benchmark_config
     bool homa;                   // --homa: talk to the server over Homa (IPPROTO_HOMA) instead of TCP
     bool sample_mix;             // --sample-mix: draw each request's type and value size at random
     unsigned int warmup_secs;    // --warmup: requests sent in the first SECS seconds are not counted
+    bool no_per_second_percentiles; // --no-per-second-percentiles: skip each client's per-second quantiles
     unsigned int request_per_interval;
     unsigned int request_interval_microsecond;
     // Client staircase ramp-up
