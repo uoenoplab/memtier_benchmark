@@ -140,6 +140,7 @@ object_generator::object_generator(size_t n_key_iterators /*= OBJECT_GENERATOR_K
         m_data_size_type(data_size_unknown),
         m_data_size_pattern(NULL),
         m_random_data(false),
+        m_sample_sizes(false),
         m_expiry_min(0),
         m_expiry_max(0),
         m_key_prefix(NULL),
@@ -175,6 +176,7 @@ object_generator::object_generator(const object_generator &copy) :
         m_data_size(copy.m_data_size),
         m_data_size_pattern(copy.m_data_size_pattern),
         m_random_data(copy.m_random_data),
+        m_sample_sizes(copy.m_sample_sizes),
         m_expiry_min(copy.m_expiry_min),
         m_expiry_max(copy.m_expiry_max),
         m_key_prefix(copy.m_key_prefix),
@@ -469,7 +471,20 @@ const char *object_generator::get_value(unsigned long long key_index, unsigned i
                                     m_data_size.size_range.size_max);
         }
     } else if (m_data_size_type == data_size_weighted) {
-        new_size = m_data_size.size_list->get_next_size();
+        if (m_sample_sizes) {
+            unsigned long long total = 0;
+            for (const auto &item : m_data_size.size_list->item_list) total += item.weight;
+            unsigned long long r = random_range(0, total - 1);
+            for (const auto &item : m_data_size.size_list->item_list) {
+                if (r < item.weight) {
+                    new_size = item.size;
+                    break;
+                }
+                r -= item.weight;
+            }
+        } else {
+            new_size = m_data_size.size_list->get_next_size();
+        }
     } else {
         assert(0);
     }

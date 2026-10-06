@@ -214,6 +214,7 @@ struct benchmark_config
     unsigned int request_rate;
     double request_rate_poisson; // --rate-poisson: per-connection Poisson arrival rate (req/s), 0 = off
     bool homa;                   // --homa: talk to the server over Homa (IPPROTO_HOMA) instead of TCP
+    bool sample_mix;             // --sample-mix: draw each request's type and value size at random
     unsigned int request_per_interval;
     unsigned int request_interval_microsecond;
     // Client staircase ramp-up

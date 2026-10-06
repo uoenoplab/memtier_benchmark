@@ -703,6 +703,17 @@ void client::create_request(struct timeval timestamp, unsigned int conn_id)
         m_tot_wait_ops++;
     }
 
+    // --sample-mix: SET with probability a / (a + b), else GET
+    else if (m_config->sample_mix && !m_config->multi_key_get && !m_config->data_import) {
+        if (m_obj_gen->random_range(1, m_config->ratio.a + m_config->ratio.b) <= m_config->ratio.a) {
+            if (!create_set_request(timestamp, conn_id)) return;
+            m_tot_set_ops++;
+        } else if (!create_get_request(timestamp, conn_id)) {
+            return;
+        }
+        m_reqs_generated++;
+    }
+
     // are we set or get? this depends on the ratio
     else if (m_set_ratio_count < m_config->ratio.a) {
         /* Before we can create a SET request, we need to read the next imported item */

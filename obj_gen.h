@@ -87,6 +87,7 @@ protected:
     } m_data_size;
     const char *m_data_size_pattern;
     bool m_random_data;
+    bool m_sample_sizes; // draw weighted sizes at random rather than in rotation
     unsigned int m_expiry_min;
     unsigned int m_expiry_max;
     const char *m_key_prefix;
@@ -134,6 +135,7 @@ public:
     unsigned long long zipf_distribution();
 
     void set_random_data(bool random_data);
+    void set_sample_sizes(bool sample) { m_sample_sizes = sample; }
     void set_data_size_fixed(unsigned int size);
     void set_data_size_range(unsigned int size_min, unsigned int size_max);
     void set_data_size_list(config_weight_list *data_size_list);

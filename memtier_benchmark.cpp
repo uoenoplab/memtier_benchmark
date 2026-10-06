@@ -1215,6 +1215,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_rate_limiting,
         o_rate_poisson,
         o_homa,
+        o_sample_mix,
         o_uri,
         o_statsd_host,
         o_statsd_port,
@@ -1331,6 +1332,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         {"rate-limiting", 1, 0, o_rate_limiting},
         {"rate-poisson", 1, 0, o_rate_poisson},
         {"homa", 0, 0, o_homa},
+        {"sample-mix", 0, 0, o_sample_mix},
         {"uri", 1, 0, o_uri},
         {"statsd-host", 1, 0, o_statsd_host},
         {"statsd-port", 1, 0, o_statsd_port},
@@ -2095,6 +2097,9 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         case o_homa:
             cfg->homa = true;
             break;
+        case o_sample_mix:
+            cfg->sample_mix = true;
+            break;
 #ifdef USE_TLS
         case o_tls:
             cfg->tls = true;
@@ -2689,6 +2694,9 @@ void usage()
         "pipeline is full is sent when it has room. Excludes --rate-limiting.\n"
         "      --homa                     Talk to the server over Homa (IPPROTO_HOMA) instead of TCP; --port is its "
         "Homa port and --server must be an IPv4 address. Each client is one Homa socket, each write one RPC.\n"
+        "      --sample-mix               Draw each request's type (SET or GET, by --ratio) and each value's size (by "
+        "--data-size-list weights) at random, instead of in a fixed rotation. Use with --randomize "
+        "--distinct-client-seed so that clients draw independently.\n"
         "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
         "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
         "      --test-time=SECS           Number of seconds to run the test\n"
@@ -5048,6 +5056,7 @@ int main(int argc, char *argv[])
             usage();
         }
         obj_gen->set_data_size_list(&cfg.data_size_list);
+        obj_gen->set_sample_sizes(cfg.sample_mix);
     } else if (cfg.data_size_range.is_defined()) {
         obj_gen->set_data_size_range(cfg.data_size_range.min, cfg.data_size_range.max);
         obj_gen->set_data_size_pattern(cfg.data_size_pattern);
