@@ -81,6 +81,7 @@ protected:
     // A connection tried to end the client after the run, but a sibling was
     // still busy (see wait_for_siblings()).
     bool m_end_waits_for_siblings;
+    struct timeval m_warmup_end; // --warmup: requests sent before this are not counted
 
     // test related
     benchmark_config *m_config;
