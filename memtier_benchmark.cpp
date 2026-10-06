@@ -1216,6 +1216,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_rate_poisson,
         o_homa,
         o_sample_mix,
+        o_warmup,
         o_uri,
         o_statsd_host,
         o_statsd_port,
@@ -1333,6 +1334,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         {"rate-poisson", 1, 0, o_rate_poisson},
         {"homa", 0, 0, o_homa},
         {"sample-mix", 0, 0, o_sample_mix},
+        {"warmup", 1, 0, o_warmup},
         {"uri", 1, 0, o_uri},
         {"statsd-host", 1, 0, o_statsd_host},
         {"statsd-port", 1, 0, o_statsd_port},
@@ -2100,6 +2102,15 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         case o_sample_mix:
             cfg->sample_mix = true;
             break;
+        case o_warmup: {
+            endptr = NULL;
+            cfg->warmup_secs = (unsigned int) strtoul(optarg, &endptr, 10);
+            if (!endptr || *endptr != '\0') {
+                fprintf(stderr, "error: --warmup must be a whole number of seconds.\n");
+                return -1;
+            }
+            break;
+        }
 #ifdef USE_TLS
         case o_tls:
             cfg->tls = true;
@@ -2697,6 +2708,9 @@ void usage()
         "      --sample-mix               Draw each request's type (SET or GET, by --ratio) and each value's size (by "
         "--data-size-list weights) at random, instead of in a fixed rotation. Use with --randomize "
         "--distinct-client-seed so that clients draw independently.\n"
+        "      --warmup=SECS              Run each client SECS seconds before --test-time starts and do not count the "
+        "requests sent meanwhile: new connections, server-side client setup and first-touch page faults stay out "
+        "of the results.\n"
         "  -c, --clients=NUMBER           Number of clients per thread (default: 50)\n"
         "  -t, --threads=NUMBER           Number of threads (default: 4)\n"
         "      --test-time=SECS           Number of seconds to run the test\n"

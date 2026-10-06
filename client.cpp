@@ -351,6 +351,9 @@ void client::set_start_time()
     } else {
         struct timeval now;
         gettimeofday(&now, NULL);
+        // --warmup: the stats start when the warm-up ends
+        now.tv_sec += m_config->warmup_secs;
+        m_warmup_end = now;
         m_stats.set_start_time(&now);
     }
 }
@@ -837,7 +840,7 @@ void client::handle_response(unsigned int conn_id, struct timeval timestamp, req
     // total latency from first send to final outcome. For non-retry runs,
     // m_first_sent_time == m_sent_time, so this is a no-op behavior change.
     struct timeval ref_sent = request->m_first_sent_time;
-    switch (request->m_type) {
+    if (!(m_config->warmup_secs && timercmp(&ref_sent, &m_warmup_end, <))) switch (request->m_type) {
     case rt_get:
         m_stats.update_get_op(&timestamp, response->get_total_len(), request->m_size, ts_diff(ref_sent, timestamp),
                               response->get_hits(), request->m_keys - response->get_hits());

@@ -68,6 +68,7 @@ protected:
     struct event_base *m_event_base;
     bool m_initialized;
     bool m_end_set;
+    struct timeval m_warmup_end; // --warmup: requests sent before this are not counted
 
     // test related
     benchmark_config *m_config;
