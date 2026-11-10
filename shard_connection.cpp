@@ -57,6 +57,7 @@
 #include <fcntl.h>
 #include <sys/mman.h>
 #include "homa/homa.h"
+#include "homa/smt_uapi.h"
 
 // Maximum reconnect delay enforced after every exponential-backoff
 // multiplication (retry_backoff.h has the one for --retry-on-error).
@@ -3370,6 +3371,11 @@ int shard_connection::homa_connect(struct connect_info *addr)
     m_homa_fd = socket(AF_INET, SOCK_DGRAM, IPPROTO_HOMA);
     if (m_homa_fd < 0) {
         benchmark_error_log("Homa socket: %s (is homa.ko loaded?)\n", strerror(errno));
+        return -1;
+    }
+    if (m_config->smt && smt_setsockopt_hardcodekey_helper(m_homa_fd, 0, 128, 0, 0, 0, 0) < 0) {
+        benchmark_error_log("SMT key: %s (does homa.ko support SMT?)\n", strerror(errno));
+        homa_close();
         return -1;
     }
     // Receive pool: the kernel's minimum, a bpage per possible CPU plus two

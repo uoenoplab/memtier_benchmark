@@ -110,3 +110,4 @@ oom-*
 /.libs/
 
 /import_object_generator_test
+.dirstamp

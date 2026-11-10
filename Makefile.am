@@ -65,6 +65,7 @@ memtier_benchmark_SOURCES = \
 	client.cpp client.h \
 	cluster_client.cpp cluster_client.h \
 	shard_connection.cpp shard_connection.h libevent_read_cap.h connections_manager.h \
+	homa/homa.h homa/smt_uapi.c homa/smt_uapi.h \
 	run_stats_types.cpp run_stats_types.h latency_percentiles.h \
 	run_stats.cpp run_stats.h latency_histogram.h \
 	JSON_handler.cpp JSON_handler.h utf8.cpp utf8.h \

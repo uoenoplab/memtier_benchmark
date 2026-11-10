@@ -1907,6 +1907,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         o_rate_limiting,
         o_rate_poisson,
         o_homa,
+        o_smt,
         o_sample_mix,
         o_warmup,
         o_no_per_second_percentiles,
@@ -2029,6 +2030,7 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
         {"rate-limiting", 1, 0, o_rate_limiting},
         {"rate-poisson", 1, 0, o_rate_poisson},
         {"homa", 0, 0, o_homa},
+        {"smt", 0, 0, o_smt},
         {"sample-mix", 0, 0, o_sample_mix},
         {"warmup", 1, 0, o_warmup},
         {"no-per-second-percentiles", 0, 0, o_no_per_second_percentiles},
@@ -2817,6 +2819,10 @@ static int config_parse_args(int argc, char *argv[], struct benchmark_config *cf
             }
             break;
         }
+        case o_smt:
+            cfg->smt = true;
+            cfg->homa = true;
+            break;
         case o_homa:
             cfg->homa = true;
             break;
@@ -3466,6 +3472,8 @@ void usage()
         "pipeline is full is sent when it has room. Excludes --rate-limiting.\n"
         "      --homa                     Talk to the server over Homa (IPPROTO_HOMA) instead of TCP; --port is its "
         "Homa port and --server must be an IPv4 address. Each client is one Homa socket, each write one RPC.\n"
+        "      --smt                      --homa with SMT encryption (an SMT homa.ko): each socket gets SMT's built-in "
+        "test key for every peer (TLS 1.2 records, AES-GCM-128), as the server must. A test key protects nothing.\n"
         "      --sample-mix               Draw each request's type (SET or GET, by --ratio) and each value's size (by "
         "--data-size-list weights) at random, instead of in a fixed rotation. Use with --randomize "
         "--distinct-client-seed so that clients draw independently.\n"

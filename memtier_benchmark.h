@@ -226,6 +226,7 @@ struct benchmark_config
     unsigned int request_rate;
     double request_rate_poisson; // --rate-poisson: per-connection Poisson arrival rate (req/s), 0 = off
     bool homa;                   // --homa: talk to the server over Homa (IPPROTO_HOMA) instead of TCP
+    bool smt;                    // --smt: Homa with SMT's built-in test key (implies --homa)
     bool sample_mix;             // --sample-mix: draw each request's type and value size at random
     unsigned int warmup_secs;    // --warmup: requests sent in the first SECS seconds are not counted
     bool no_per_second_percentiles; // --no-per-second-percentiles: skip each client's per-second quantiles
