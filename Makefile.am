@@ -22,7 +22,7 @@ CODE_COVERAGE_IGNORE_PATTERN='*/deps/hdr_histogram/*' '*/tests/*'
 # Targets overriding their own _LDFLAGS must include it if instrumented.
 AM_LDFLAGS = $(CODE_COVERAGE_LDFLAGS)
 
-EXTRA_DIST = README.md COPYING version.sh \
+EXTRA_DIST = README.md README-memtier.md COPYING version.sh \
 	tests/check_version_build.py tests/check_code_coverage.sh \
 	scripts/fetch_commands_meta.sh \
 	scripts/gen_command_meta.py \
